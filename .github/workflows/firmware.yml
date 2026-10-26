@@ -1,4 +1,4 @@
-name: ESP-IDF firmware build
+name: ESP32-C3 firmware
 on:
   push:
   pull_request:
@@ -9,9 +9,20 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: espressif/esp-idf-ci-action@v1
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build ESP-IDF firmware
+        uses: espressif/esp-idf-ci-action@v1
         with:
           esp_idf_version: v5.3.2
           target: esp32c3
           path: firmware
+      - name: Upload firmware binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: blackvault-esp32c3-firmware
+          path: |
+            firmware/build/blackvault_firmware.bin
+            firmware/build/bootloader/bootloader.bin
+            firmware/build/partition_table/partition-table.bin
+          if-no-files-found: error
