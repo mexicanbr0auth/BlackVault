@@ -35,7 +35,8 @@ class MainActivity : Activity() {
   root.addView(TextView(this).apply { text="Início          Carteira          Redes          Mais"; gravity=Gravity.CENTER; setTextColor(Color.rgb(60,150,255)); setPadding(0,28,0,0) })
   setContentView(root)
   val f=IntentFilter().apply { addAction(permissionAction); addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED); addAction(UsbManager.ACTION_USB_DEVICE_DETACHED) }
-  registerReceiver(receiver,f,RECEIVER_NOT_EXPORTED); scan()
+  if (android.os.Build.VERSION.SDK_INT >= 33) registerReceiver(receiver,f,RECEIVER_NOT_EXPORTED) else registerReceiver(receiver,f)
+  scan()
  }
  private fun label(s:String,size:Int,color:Int)=TextView(this).apply { text=s; textSize=size.toFloat(); setTextColor(color); setPadding(0,8,0,8) }
  private fun scan() {
