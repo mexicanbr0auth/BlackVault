@@ -8,11 +8,21 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothGatt
+import android.bluetooth.BluetoothGattCallback
+import android.bluetooth.BluetoothProfile
+import android.bluetooth.BluetoothManager
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
+import java.util.UUID
 import android.view.Gravity
 import android.view.View
 import android.widget.*
@@ -22,6 +32,12 @@ class MainActivity : Activity() {
     private lateinit var connection: TextView
     private lateinit var usbInfo: TextView
     private val permissionAction = "com.blackvault.wallet.USB_PERMISSION"
+    private val serviceUuid = UUID.fromString("7b5a0001-6f2d-4a91-9c7e-42564c564c54")
+    private val rxUuid = UUID.fromString("7b5a0002-6f2d-4a91-9c7e-42564c564c54")
+    private val txUuid = UUID.fromString("7b5a0003-6f2d-4a91-9c7e-42564c564c54")
+    private var gatt: BluetoothGatt? = null
+    private var bleScanCallback: ScanCallback? = null
+    private var bleStarted = false
     private val bg = Color.rgb(11, 13, 15)
     private val cardBg = Color.rgb(23, 26, 30)
     private val white = Color.rgb(244, 246, 248)
@@ -126,6 +142,7 @@ class MainActivity : Activity() {
         val f = IntentFilter().apply { addAction(permissionAction); addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED); addAction(UsbManager.ACTION_USB_DEVICE_DETACHED) }
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(receiver, f, RECEIVER_NOT_EXPORTED) else registerReceiver(receiver, f)
         scan()
+        startBleDiscovery()
     }
 
     private fun actionTile(symbol: String, caption: String): View = LinearLayout(this).apply {
@@ -149,6 +166,85 @@ class MainActivity : Activity() {
     private fun shape(color: Int, radius: Int): GradientDrawable = GradientDrawable().apply { setColor(color); cornerRadius = dp(radius).toFloat() }
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
+    private fun hasBlePermissions(): Boolean =
+        if (Build.VERSION.SDK_INT >= 31) checkSelfPermission(android.Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED && checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+        else checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    private fun startBleDiscovery() {
+        val adapter = (getSystemService(BLUETOOTH_SERVICE) as BluetoothManager).adapter
+        if (adapter == null || !adapter.isEnabled) {
+            usbInfo.text = "BLE indisponível/desativado. Conecte por USB OTG ou ative o Bluetooth."
+            return
+        }
+        if (!hasBlePermissions()) {
+            requestPermissions(if (Build.VERSION.SDK_INT >= 31) arrayOf(android.Manifest.permission.BLUETOOTH_SCAN, android.Manifest.permission.BLUETOOTH_CONNECT) else arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION), 701)
+            return
+        }
+        if (bleStarted) return
+        val scanner = adapter.bluetoothLeScanner ?: return
+        bleStarted = true
+        val callback = object : ScanCallback() {
+            override fun onScanResult(callbackType: Int, result: ScanResult) {
+                val name = result.scanRecord?.deviceName ?: try { result.device.name } catch (_: SecurityException) { null }
+                if (name == "BlackVault" || result.scanRecord?.serviceUuids?.any { it.uuid == serviceUuid } == true) {
+                    try { scanner.stopScan(this) } catch (_: Exception) {}
+                    bleScanCallback = null
+                    runOnUiThread {
+                        connection.text = "  BlackVault BLE encontrado · conectando"
+                        connection.setTextColor(blue)
+                        usbInfo.text = "Dispositivo BLE encontrado; verificando o serviço GATT."
+                    }
+                    try { gatt?.close(); gatt = result.device.connectGatt(this@MainActivity, false, gattCallback, android.bluetooth.BluetoothDevice.TRANSPORT_LE) }
+                    catch (_: SecurityException) { bleStarted = false }
+                }
+            }
+            override fun onScanFailed(errorCode: Int) {
+                bleStarted = false
+                runOnUiThread { usbInfo.text = "Busca BLE falhou ($errorCode). USB OTG continua disponível." }
+            }
+        }
+        bleScanCallback = callback
+        try {
+            scanner.startScan(null, ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), callback)
+            usbInfo.text = "Buscando BlackVault por BLE automaticamente… USB OTG também é compatível."
+        } catch (_: SecurityException) { bleStarted = false; usbInfo.text = "Permissão Bluetooth necessária para busca automática." }
+    }
+
+    private val gattCallback = object : BluetoothGattCallback() {
+        override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_CONNECTED) {
+                runOnUiThread { connection.text = "  BLE conectado · verificando serviço"; connection.setTextColor(blue) }
+                try { g.discoverServices() } catch (_: SecurityException) {}
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                g.close()
+                if (gatt === g) gatt = null
+                bleStarted = false
+                runOnUiThread { connection.text = "  Dispositivo desconectado"; connection.setTextColor(muted) }
+            }
+        }
+        override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+            val service = g.getService(serviceUuid)
+            runOnUiThread {
+                if (status == BluetoothGatt.GATT_SUCCESS && service?.getCharacteristic(rxUuid) != null && service.getCharacteristic(txUuid) != null) {
+                    connection.text = "  BLE conectado · serviço encontrado"
+                    connection.setTextColor(green)
+                    usbInfo.text = "Serviço GATT reconhecido. Operações sensíveis ficam bloqueadas até autenticação criptográfica."
+                } else {
+                    connection.text = "  BLE incompatível"
+                    connection.setTextColor(muted)
+                    usbInfo.text = "Conectou por BLE, mas o serviço BlackVault não foi encontrado. Nenhuma operação liberada."
+                    g.disconnect()
+                }
+            }
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 701 && grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) startBleDiscovery()
+        else if (requestCode == 701) usbInfo.text = "Permissão BLE negada. USB OTG permanece disponível."
+    }
+
     private fun scan() {
         val devices = usb.deviceList.values
         if (devices.isEmpty()) { disconnected("Nenhum USB detectado. Conecte o ESP32-C3 via OTG."); return }
@@ -163,5 +259,10 @@ class MainActivity : Activity() {
         usbInfo.text = "VID ${d.vendorId}  ·  PID ${d.productId}\nDispositivo encontrado; comunicação serial e autenticação ainda precisam ser implementadas."
     }
     private fun disconnected(s: String) { connection.text = "  Dispositivo desconectado"; connection.setTextColor(muted); usbInfo.text = s }
-    override fun onDestroy() { try { unregisterReceiver(receiver) } catch (_: Exception) {}; super.onDestroy() }
+    override fun onDestroy() {
+        try { unregisterReceiver(receiver) } catch (_: Exception) {}
+        try { if (hasBlePermissions()) (getSystemService(BLUETOOTH_SERVICE) as BluetoothManager).adapter?.bluetoothLeScanner?.let { scanner -> bleScanCallback?.let { scanner.stopScan(it) } } } catch (_: Exception) {}
+        try { gatt?.disconnect(); gatt?.close() } catch (_: Exception) {}
+        super.onDestroy()
+    }
 }
