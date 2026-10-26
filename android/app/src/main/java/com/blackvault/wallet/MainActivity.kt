@@ -11,6 +11,8 @@ import android.hardware.usb.UsbManager
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
+import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.ScanCallback
@@ -237,6 +239,39 @@ class MainActivity : Activity() {
                 }
             }
         }
+    }
+
+    private fun sendHello(g: BluetoothGatt, rx: BluetoothGattCharacteristic) {
+        val payload = "{\"v\":0,\"id\":1,\"cmd\":\"hello\"}".toByteArray(Charsets.UTF_8)
+        try {
+            if (Build.VERSION.SDK_INT >= 33) g.writeCharacteristic(rx, payload, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+            else { @Suppress("DEPRECATION") rx.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT; @Suppress("DEPRECATION") rx.value = payload; @Suppress("DEPRECATION") g.writeCharacteristic(rx) }
+        } catch (_: SecurityException) { usbInfo.text = "Sem permissão para enviar handshake BLE." }
+    }
+
+    override fun onDescriptorWrite(g: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+        if (descriptor.uuid == UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")) {
+            val rx = g.getService(serviceUuid)?.getCharacteristic(rxUuid) ?: return
+            if (status == BluetoothGatt.GATT_SUCCESS) sendHello(g, rx)
+        }
+    }
+
+    override fun onCharacteristicChanged(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
+        if (characteristic.uuid == txUuid) {
+            val response = value.toString(Charsets.UTF_8)
+            runOnUiThread {
+                usbInfo.text = "Resposta do ESP32-C3: $response"
+                if (response.contains("\"ok\":true") && response.contains("\"device\":\"BlackVault\"")) {
+                    connection.text = "  BlackVault BLE conectado · handshake OK"
+                    connection.setTextColor(green)
+                }
+            }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onCharacteristicChanged(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
+        if (Build.VERSION.SDK_INT < 33) onCharacteristicChanged(g, characteristic, characteristic.value ?: byteArrayOf())
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {

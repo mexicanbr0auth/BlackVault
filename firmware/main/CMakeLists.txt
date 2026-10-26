@@ -1,1 +1,1 @@
-idf_component_register(SRCS "main.c" INCLUDE_DIRS "." REQUIRES json driver)
+idf_component_register(SRCS "main.c" INCLUDE_DIRS "." REQUIRES json bt)
