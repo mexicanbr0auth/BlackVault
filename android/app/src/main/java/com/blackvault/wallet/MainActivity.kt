@@ -226,19 +226,79 @@ class MainActivity : Activity() {
         }
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
             val service = g.getService(serviceUuid)
-            runOnUiThread {
-                if (status == BluetoothGatt.GATT_SUCCESS && service?.getCharacteristic(rxUuid) != null && service.getCharacteristic(txUuid) != null) {
-                    connection.text = "  BLE conectado · serviço encontrado"
-                    connection.setTextColor(green)
-                    usbInfo.text = "Serviço GATT reconhecido. Operações sensíveis ficam bloqueadas até autenticação criptográfica."
-                } else {
+            if (status == BluetoothGatt.GATT_SUCCESS && service?.getCharacteristic(rxUuid) != null && service.getCharacteristic(txUuid) != null) {
+                runOnUiThread {
+                    connection.text = "  BlackVault BLE conectado · iniciando handshake"
+                    connection.setTextColor(blue)
+                }
+                val tx = service.getCharacteristic(txUuid)!!
+                val rx = service.getCharacteristic(rxUuid)!!
+                try {
+                    g.setCharacteristicNotification(tx, true)
+                    val cccd = tx.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
+                    if (cccd != null) {
+                        if (Build.VERSION.SDK_INT >= 33) g.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                        else { @Suppress("DEPRECATION") cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE; @Suppress("DEPRECATION") g.writeDescriptor(cccd) }
+                    } else sendHello(g, rx)
+                } catch (_: SecurityException) { runOnUiThread { usbInfo.text = "Permissão GATT insuficiente." } }
+            } else {
+                runOnUiThread {
                     connection.text = "  BLE incompatível"
                     connection.setTextColor(muted)
-                    usbInfo.text = "Conectou por BLE, mas o serviço BlackVault não foi encontrado. Nenhuma operação liberada."
-                    g.disconnect()
+                    usbInfo.text = "Serviço BlackVault não encontrado; nenhuma operação liberada."
                 }
+                g.disconnect()
             }
         }
+
+        override fun onDescriptorWrite(g: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+            if (descriptor.uuid == UUID.fromString("00002902-0000-1000-8000-00805f9b34fb") && status == BluetoothGatt.GATT_SUCCESS) {
+                val rx = g.getService(serviceUuid)?.getCharacteristic(rxUuid) ?: return
+                sendHello(g, rx)
+            }
+        }
+
+        override fun onCharacteristicChanged(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
+            if (characteristic.uuid == txUuid) processDeviceResponse(value.toString(Charsets.UTF_8))
+        }
+
+        @Suppress("DEPRECATION")
+        override fun onCharacteristicChanged(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
+            if (Build.VERSION.SDK_INT < 33) processDeviceResponse(characteristic.value?.toString(Charsets.UTF_8) ?: "")
+        }
+    }
+
+    private fun processDeviceResponse(response: String) {
+        runOnUiThread {
+            usbInfo.text = "Resposta do ESP32-C3: $response"
+            if (response.contains("\"ok\":true") && response.contains("\"device\":\"BlackVault\"")) {
+                connection.text = "  BlackVault conectado · dispositivo reconhecido"
+                connection.setTextColor(green)
+                showWalletSetupDialog()
+            }
+        }
+    }
+
+    private fun showWalletSetupDialog() {
+        if (isFinishing || isDestroyed) return
+        val dialog = android.app.AlertDialog.Builder(this)
+            .setTitle("Configurar carteira")
+            .setMessage("O ESP32-C3 foi encontrado. Deseja criar uma nova carteira ou importar uma seed existente?\n\nAviso: o canal atual ainda não possui autenticação criptográfica. Não envie nem digite sua seed nesta versão.")
+            .setPositiveButton("Criar carteira") { _, _ ->
+                android.app.AlertDialog.Builder(this)
+                    .setTitle("Criação ainda bloqueada")
+                    .setMessage("A criação segura exige geração BIP39, armazenamento protegido e protocolo autenticado entre app e ESP32. Esses componentes ainda não estão prontos; não será gerada uma seed falsa.")
+                    .setPositiveButton("OK", null).show()
+            }
+            .setNegativeButton("Importar seed") { _, _ ->
+                android.app.AlertDialog.Builder(this)
+                    .setTitle("Importação ainda bloqueada")
+                    .setMessage("Por segurança, não cole uma seed real enquanto a conexão não estiver autenticada. A importação será habilitada após implementar o canal seguro.")
+                    .setPositiveButton("Entendi", null).show()
+            }
+            .setNeutralButton("Depois", null)
+            .create()
+        dialog.show()
     }
 
     private fun sendHello(g: BluetoothGatt, rx: BluetoothGattCharacteristic) {
@@ -247,31 +307,6 @@ class MainActivity : Activity() {
             if (Build.VERSION.SDK_INT >= 33) g.writeCharacteristic(rx, payload, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
             else { @Suppress("DEPRECATION") rx.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT; @Suppress("DEPRECATION") rx.value = payload; @Suppress("DEPRECATION") g.writeCharacteristic(rx) }
         } catch (_: SecurityException) { usbInfo.text = "Sem permissão para enviar handshake BLE." }
-    }
-
-    override fun onDescriptorWrite(g: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
-        if (descriptor.uuid == UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")) {
-            val rx = g.getService(serviceUuid)?.getCharacteristic(rxUuid) ?: return
-            if (status == BluetoothGatt.GATT_SUCCESS) sendHello(g, rx)
-        }
-    }
-
-    override fun onCharacteristicChanged(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
-        if (characteristic.uuid == txUuid) {
-            val response = value.toString(Charsets.UTF_8)
-            runOnUiThread {
-                usbInfo.text = "Resposta do ESP32-C3: $response"
-                if (response.contains("\"ok\":true") && response.contains("\"device\":\"BlackVault\"")) {
-                    connection.text = "  BlackVault BLE conectado · handshake OK"
-                    connection.setTextColor(green)
-                }
-            }
-        }
-    }
-
-    @Suppress("DEPRECATION")
-    override fun onCharacteristicChanged(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-        if (Build.VERSION.SDK_INT < 33) onCharacteristicChanged(g, characteristic, characteristic.value ?: byteArrayOf())
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
