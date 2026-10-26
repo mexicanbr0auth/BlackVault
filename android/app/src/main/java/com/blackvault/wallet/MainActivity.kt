@@ -112,7 +112,7 @@ class MainActivity : Activity() {
         content.addView(text("Consulte saldos nativos do mesmo endereço em Ethereum, Polygon, BNB Chain, Arbitrum, Optimism, Base e Avalanche. Use somente seu endereço público 0x…; nunca informe seed ou chave privada.", 12, muted).apply { setPadding(0, 0, 0, dp(12)) })
         val evmAddress = EditText(this).apply {
             hint = "Endereço público 0x…"
-            setHintTextColor(muted); setTextColor(white); textSize = 14f; singleLine = true
+            setHintTextColor(muted); setTextColor(white); textSize = 14f; setSingleLine(true)
             setPadding(dp(14), dp(12), dp(14), dp(12)); background = shape(cardBg, 12)
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
         }
