@@ -52,8 +52,10 @@ static void respond(const char *request) {
             snprintf((char *)tx_buffer, sizeof(tx_buffer), "{\"v\":0,\"id\":%d,\"ok\":false,\"error\":\"bad_request\"}", id);
         } else if (!strcmp(cmd, "hello")) {
             snprintf((char *)tx_buffer, sizeof(tx_buffer), "{\"v\":0,\"id\":%d,\"ok\":true,\"device\":\"BlackVault\",\"fw\":\"0.2.0-ble-dev\",\"transport\":\"ble\",\"capabilities\":[\"identity\",\"status\"],\"security\":\"unauthenticated-dev\"}", id);
-        } else if (!strcmp(cmd, "status")) {
-            snprintf((char *)tx_buffer, sizeof(tx_buffer), "{\"v\":0,\"id\":%d,\"ok\":true,\"state\":\"idle\",\"keys_ready\":false,\"signing_ready\":false}", id);
+        } else if (!strcmp(cmd, "status") || !strcmp(cmd, "wallet_status")) {
+            snprintf((char *)tx_buffer, sizeof(tx_buffer), "{\"v\":0,\"id\":%d,\"ok\":true,\"state\":\"uninitialized\",\"wallet_configured\":false,\"keys_ready\":false,\"signing_ready\":false,\"secure_session\":false}", id);
+        } else if (!strcmp(cmd, "wallet_create") || !strcmp(cmd, "wallet_import")) {
+            snprintf((char *)tx_buffer, sizeof(tx_buffer), "{\"v\":0,\"id\":%d,\"ok\":false,\"error\":\"secure_pairing_required\",\"message\":\"Seed setup disabled until authenticated encrypted pairing is implemented\"}", id);
         } else {
             snprintf((char *)tx_buffer, sizeof(tx_buffer), "{\"v\":0,\"id\":%d,\"ok\":false,\"error\":\"unknown_command\"}", id);
         }
@@ -142,7 +144,7 @@ static void init_attribute_table(void) {
 }
 
 void app_main(void) {
-    ESP_LOGI(TAG, "BlackVault BLE transport prototype; no keys or signing.");
+    ESP_LOGI(TAG, "BlackVault BLE transport; wallet creation/import disabled until secure pairing is implemented.");
     ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_bt_controller_init(&bt_cfg));
