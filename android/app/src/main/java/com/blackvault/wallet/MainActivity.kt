@@ -25,6 +25,9 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
 import java.util.UUID
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 import android.view.Gravity
 import android.view.View
 import android.widget.*
@@ -104,6 +107,78 @@ class MainActivity : Activity() {
         chainRow.addView(text("◆  Ethereum / EVM", 12, white))
         balance.addView(chainRow)
         content.addView(balance)
+
+        content.addView(sectionTitle("Saldos EVM", "MULTICHAIN"))
+        content.addView(text("Consulte saldos nativos do mesmo endereço em Ethereum, Polygon, BNB Chain, Arbitrum, Optimism, Base e Avalanche. Use somente seu endereço público 0x…; nunca informe seed ou chave privada.", 12, muted).apply { setPadding(0, 0, 0, dp(12)) })
+        val evmAddress = EditText(this).apply {
+            hint = "Endereço público 0x…"
+            setHintTextColor(muted); setTextColor(white); textSize = 14f; singleLine = true
+            setPadding(dp(14), dp(12), dp(14), dp(12)); background = shape(cardBg, 12)
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+        }
+        content.addView(evmAddress, LinearLayout.LayoutParams(-1, dp(52)))
+        val evmResults = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(8), dp(14), dp(8)); background = shape(cardBg, 16) }
+        val evmStatus = text("Informe um endereço para carregar os saldos.", 13, muted)
+        evmResults.addView(evmStatus)
+        content.addView(evmResults, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
+        val evmButton = Button(this).apply {
+            text = "Consultar todas as redes EVM"; setTextColor(white)
+            setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.rgb(48, 91, 160)))
+            setOnClickListener {
+                val address = evmAddress.text.toString().trim()
+                if (!address.matches(Regex("^0x[a-fA-F0-9]{40}$"))) {
+                    evmStatus.text = "Endereço inválido. Precisa ter 42 caracteres e começar por 0x."
+                    evmStatus.setTextColor(Color.rgb(255, 170, 90))
+                } else {
+                    evmResults.removeAllViews()
+                    evmStatus.text = "Consultando RPCs públicos…"
+                    evmStatus.setTextColor(muted); evmResults.addView(evmStatus)
+                    val networks = listOf(
+                        Triple("Ethereum", "https://cloudflare-eth.com", 18),
+                        Triple("Polygon", "https://polygon-bor-rpc.publicnode.com", 18),
+                        Triple("BNB Chain", "https://bsc-rpc.publicnode.com", 18),
+                        Triple("Arbitrum One", "https://arb1.arbitrum.io/rpc", 18),
+                        Triple("Optimism", "https://mainnet.optimism.io", 18),
+                        Triple("Base", "https://mainnet.base.org", 18),
+                        Triple("Avalanche C-Chain", "https://api.avax.network/ext/bc/C/rpc", 18)
+                    )
+                    val rows = java.util.concurrent.ConcurrentHashMap<String, String>()
+                    val pool = java.util.concurrent.Executors.newFixedThreadPool(7)
+                    networks.forEach { net -> pool.execute {
+                        var conn: HttpURLConnection? = null
+                        val value = try {
+                            conn = (URL(net.second).openConnection() as HttpURLConnection).apply {
+                                requestMethod = "POST"; connectTimeout = 9000; readTimeout = 9000; doOutput = true
+                                setRequestProperty("Content-Type", "application/json")
+                            }
+                            val payload = "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getBalance\",\"params\":[\"$address\",\"latest\"],\"id\":1}"
+                            conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
+                            if (conn.responseCode != 200) throw Exception("HTTP ${conn.responseCode}")
+                            val response = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+                            if (response.has("error")) throw Exception("RPC error")
+                            val hex = response.getString("result").removePrefix("0x").ifEmpty { "0" }
+                            val wei = java.math.BigInteger(hex, 16)
+                            val amount = java.math.BigDecimal(wei).divide(java.math.BigDecimal.TEN.pow(net.third)).stripTrailingZeros().toPlainString()
+                            "$amount ${if (net.first == "Avalanche C-Chain") "AVAX" else if (net.first == "BNB Chain") "BNB" else if (net.first == "Polygon") "POL/MATIC" else if (net.first == "Ethereum") "ETH" else "ETH"}"
+                        } catch (e: Exception) { "Indisponível (${e.message ?: "falha de rede"})" }
+                        finally { conn?.disconnect() }
+                        rows[net.first] = value
+                        runOnUiThread {
+                            evmResults.removeAllViews()
+                            networks.forEach { n ->
+                                val line = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(9), 0, dp(9)) }
+                                line.addView(text(n.first, 13, white, true), LinearLayout.LayoutParams(0, -2, 1f))
+                                line.addView(text(rows[n.first] ?: "Consultando…", 12, if (rows[n.first]?.startsWith("Indisponível") == true) Color.rgb(255,170,90) else green))
+                                evmResults.addView(line)
+                                if (n != networks.last()) evmResults.addView(View(this@MainActivity).apply { setBackgroundColor(Color.rgb(44,48,54)) }, LinearLayout.LayoutParams(-1, dp(1)))
+                            }
+                        }
+                    } }
+                    pool.shutdown()
+                }
+            }
+        }
+        content.addView(evmButton, LinearLayout.LayoutParams(-1, dp(50)).apply { topMargin = dp(10) })
 
         content.addView(sectionTitle("Acesso rápido", "AÇÕES"))
         val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER; }
